@@ -1,6 +1,7 @@
 """Main bot module."""
 import logging
 import os
+import asyncio
 from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -47,7 +48,7 @@ def root():
     })
 
 @app.route('/webhook', methods=['POST'])
-def webhook():
+async def webhook():
     """Webhook endpoint for Telegram updates."""
     try:
         logger.info("Webhook request received")
@@ -62,7 +63,7 @@ def webhook():
 
         # Process the update
         try:
-            dp.process_update(update)
+            await dp.process_update(update)
             logger.info("Update processed successfully")
         except Exception as e:
             logger.error(f"Error processing update: {str(e)}", exc_info=True)
@@ -78,22 +79,32 @@ def webhook():
         logger.error(f"Error in webhook: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+async def setup_bot():
+    """Initialize bot and register handlers."""
+    logger.info("Starting bot setup...")
+
+    # Register handlers
+    await register_shop_handlers(dp)
+    await register_review_handlers(dp)
+    await register_admin_handlers(dp)
+
+    # Initialize database and test data
+    init_db()
+    await initialize_test_products()
+
+    # Set webhook
+    replit_domain = os.getenv('REPL_SLUG', 'localhost')
+    webhook_url = f"https://{replit_domain}.repl.co/webhook"
+    await bot.delete_webhook()
+    await bot.set_webhook(webhook_url)
+    logger.info(f"Webhook set to {webhook_url}")
+
 if __name__ == "__main__":
     try:
         logger.info("Starting application...")
 
-        # Initialize bot and register handlers
-        register_shop_handlers(dp)
-        register_review_handlers(dp)
-        register_admin_handlers(dp)
-        init_db()
-        initialize_test_products()
-
-        # Set webhook
-        webhook_url = "https://telbot.introlaseru.workers.dev/webhook"
-        bot.delete_webhook()
-        bot.set_webhook(webhook_url)
-        logger.info(f"Webhook set to {webhook_url}")
+        # Initialize bot asynchronously
+        asyncio.run(setup_bot())
 
         # Запускаем Flask приложение
         port = int(os.getenv('PORT', 5000))
