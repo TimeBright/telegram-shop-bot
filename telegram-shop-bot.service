@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram Shop Bot
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/telegram-shop-bot
+Environment=PATH=/opt/telegram-shop-bot/venv/bin
+ExecStart=/opt/telegram-shop-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
