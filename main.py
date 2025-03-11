@@ -2,7 +2,7 @@
 import logging
 import os
 import asyncio
-from flask import Flask, request, jsonify
+from quart import Quart, request
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from src.shop import register_shop_handlers
@@ -22,13 +22,13 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Проверяем наличие токена
+# Проверка наличия токена
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN is required")
 
-# Создаем приложение Flask
-app = Flask(__name__)
+# Создаем Quart приложение для webhook
+app = Quart(__name__)
 
 # Создаем объекты бота и диспетчера
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -36,77 +36,92 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 @app.route('/')
-def root():
-    """Root endpoint to verify server is running."""
-    logger.info("Root endpoint accessed")
-    replit_domain = request.headers.get('Host', 'unknown')
-    logger.info(f"Current domain: {replit_domain}")
-    return jsonify({
-        "status": "running",
-        "message": "Telegram bot webhook server is operational",
-        "webhook_url": f"https://{replit_domain}/webhook"
-    })
+async def root():
+    """Health check endpoint."""
+    logger.info("Health check accessed")
+    webhook_info = await bot.get_webhook_info()
+    return {
+        "status": "ok",
+        "message": "Bot webhook server is running",
+        "webhook_url": webhook_info.url,
+        "pending_updates": webhook_info.pending_update_count
+    }
 
 @app.route('/webhook', methods=['POST'])
-def webhook():
+async def webhook():
     """Webhook endpoint for Telegram updates."""
     try:
-        logger.info("Webhook request received")
-        logger.info(f"Headers: {dict(request.headers)}")
-
         if not request.is_json:
-            logger.error("Request is not JSON")
-            return jsonify({"error": "Expected JSON"}), 400
+            logger.error("Invalid content type")
+            return {"ok": False, "error": "Invalid content type"}, 400
 
-        update = request.get_json()
-        logger.info(f"Update received: {update}")
+        update = await request.get_json()
+        logger.info("Received webhook update")
 
-        # Process the update asynchronously
-        asyncio.run(dp.process_update(update))
+        await dp.feed_update(bot, update)
         logger.info("Update processed successfully")
 
-        return jsonify({"status": "ok"})
-
+        return {"ok": True}
     except Exception as e:
         logger.error(f"Error in webhook: {str(e)}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return {"ok": False, "error": str(e)}, 500
 
-async def setup_bot():
-    """Initialize bot and register handlers."""
-    logger.info("Starting bot setup...")
-
-    # Register handlers
-    await register_shop_handlers(dp)
-    await register_review_handlers(dp)
-    await register_admin_handlers(dp)
-
-    # Initialize database and test data
-    init_db()
-    await initialize_test_products()
-
-    # Set webhook using the actual domain
-    domain = os.getenv('RAILWAY_STATIC_URL', 'localhost')
-    webhook_url = f"https://{domain}/webhook"
-    await bot.delete_webhook()
-    await bot.set_webhook(webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
-
-if __name__ == "__main__":
+async def setup_webhook():
+    """Setup webhook configuration."""
     try:
-        logger.info("Starting application...")
+        # Используем предоставленный домен Railway
+        webhook_host = "stunning-learning-production.up.railway.app"
+        webhook_url = f"https://{webhook_host}/webhook"
 
-        # Initialize bot asynchronously
-        asyncio.run(setup_bot())
+        logger.info("Removing old webhook configuration...")
+        await bot.delete_webhook()
 
-        # Запускаем Flask приложение
-        port = int(os.getenv('PORT', 5000))
-        logger.info(f"Starting Flask app on port {port}")
-        app.run(
-            host='0.0.0.0',
-            port=port,
-            debug=False,
-            threaded=True
-        )
+        logger.info(f"Setting webhook to: {webhook_url}")
+        await bot.set_webhook(webhook_url)
+
+        # Добавляем небольшую задержку для гарантии установки webhook
+        await asyncio.sleep(1)
+
+        # Проверяем, что webhook установлен
+        webhook_info = await bot.get_webhook_info()
+        if webhook_info.url == webhook_url:
+            logger.info("Webhook successfully configured")
+            # Проверяем, есть ли ожидающие обновления
+            if webhook_info.pending_update_count > 0:
+                logger.info(f"Found {webhook_info.pending_update_count} pending updates")
+            return True
+        else:
+            raise ValueError(f"Failed to set webhook. Expected {webhook_url}, got {webhook_info.url}")
 
     except Exception as e:
-        logger.error(f"Application crashed: {str(e)}", exc_info=True)
+        logger.error(f"Error setting up webhook: {str(e)}", exc_info=True)
+        raise
+
+@app.before_serving
+async def startup():
+    """Initialize bot before starting server."""
+    try:
+        logger.info("Starting bot initialization...")
+
+        # Register handlers
+        await register_shop_handlers(dp)
+        await register_review_handlers(dp)
+        await register_admin_handlers(dp)
+
+        # Initialize database
+        init_db()
+        await initialize_test_products()
+
+        # Setup webhook
+        if not await setup_webhook():
+            raise ValueError("Failed to setup webhook")
+
+        logger.info("Bot initialization completed successfully")
+    except Exception as e:
+        logger.error(f"Error during initialization: {str(e)}", exc_info=True)
+        raise
+
+if __name__ == "__main__":
+    port = int(os.getenv('PORT', 5000))
+    logger.info(f"Starting bot on port {port}")
+    app.run(host='0.0.0.0', port=port)
