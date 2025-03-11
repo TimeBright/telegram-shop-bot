@@ -48,7 +48,7 @@ def root():
     })
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
     """Webhook endpoint for Telegram updates."""
     try:
         logger.info("Webhook request received")
@@ -61,19 +61,11 @@ async def webhook():
         update = request.get_json()
         logger.info(f"Update received: {update}")
 
-        # Process the update
-        try:
-            await dp.process_update(update)
-            logger.info("Update processed successfully")
-        except Exception as e:
-            logger.error(f"Error processing update: {str(e)}", exc_info=True)
+        # Process the update asynchronously
+        asyncio.run(dp.process_update(update))
+        logger.info("Update processed successfully")
 
-        # Формируем ответ с текущим URL
-        replit_domain = request.headers.get('Host', 'unknown')
-        response = jsonify({"status": "ok"})
-        response.headers['X-Replit-URL'] = f"https://{replit_domain}/webhook"
-        logger.info(f"Sending response with X-Replit-URL: {response.headers['X-Replit-URL']}")
-        return response
+        return jsonify({"status": "ok"})
 
     except Exception as e:
         logger.error(f"Error in webhook: {str(e)}", exc_info=True)
@@ -92,9 +84,9 @@ async def setup_bot():
     init_db()
     await initialize_test_products()
 
-    # Set webhook
-    replit_domain = os.getenv('REPL_SLUG', 'localhost')
-    webhook_url = f"https://{replit_domain}.repl.co/webhook"
+    # Set webhook using the actual domain
+    domain = os.getenv('RAILWAY_STATIC_URL', 'localhost')
+    webhook_url = f"https://{domain}/webhook"
     await bot.delete_webhook()
     await bot.set_webhook(webhook_url)
     logger.info(f"Webhook set to {webhook_url}")
